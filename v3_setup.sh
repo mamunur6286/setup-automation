@@ -141,7 +141,9 @@ cat "${KEY}.pub"
 echo "--------------------------------------------------------------------------"
 while true; do
   read -rp "Press Enter after adding the key to GitHub..."
-  if ssh -o BatchMode=yes -T "git@${GIT_HOST}" 2>&1 | grep -qiE "welcome|successfully"; then
+  SSH_RESP=$(ssh -o BatchMode=yes -T "git@${GIT_HOST}" 2>&1 || true)
+  echo "  $GIT_HOST says: $SSH_RESP"
+  if grep -qiE "welcome|successfully" <<<"$SSH_RESP"; then
     ok "GitHub SSH access confirmed"; break
   fi
   warn "Cannot authenticate to $GIT_HOST yet. Check the key and try again."
@@ -444,6 +446,8 @@ echo "  App         : http://${DOMAIN}   or   http://${IP}:${APP_PORT}"
 echo "  phpMyAdmin  : http://${IP}:${PMA_PORT}"
 echo "  App path    : ${APP_PATH}"
 echo "  Log file    : ${LOG_FILE}"
+echo "  SSH key     : ${KEY}.pub"
+echo "                $(cat "${KEY}.pub")"
 echo
 echo "  Next steps:"
 echo "   - Point DNS for ${DOMAIN} to ${IP}"
