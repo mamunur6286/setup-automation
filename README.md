@@ -2,7 +2,7 @@
 
 `v3_setup.sh` sets up a fresh Ubuntu server for the V3 ERP (Laravel) app. It asks a few questions, then installs and configures everything it needs.
 
-Requires Ubuntu 24.04. It installs PHP 8.3.6 from Ubuntu's own repo.
+Requires Ubuntu 22.04 (24.04 also works). On 22.04 it installs the latest PHP 8.3.x from `ppa:ondrej/php`.
 
 ## Usage
 
@@ -36,7 +36,7 @@ Then yes/no questions: Supervisor + Horizon, cron for `schedule:run`, cron for `
 1. Updates the system and installs nginx, git, curl and unzip. Removes Apache if present.
 2. Creates an SSH key for GitHub and waits until access works.
 3. Clones the repo into `/var/www/<project>`.
-4. Installs PHP 8.3.6 (FPM, no Apache) and its extensions, then tunes `php.ini`.
+4. Installs PHP 8.3 (FPM, no Apache) and its extensions, then tunes `php.ini`.
 5. Installs Composer.
 6. Installs MySQL, creates the database and user, and tunes the config.
 7. Installs phpMyAdmin on its own port.
