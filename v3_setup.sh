@@ -308,6 +308,7 @@ declare -A MYSQL_OPTS=(
   [max_allowed_packet]=1G [max_heap_table_size]=128M [max_connections]=500
   [table_open_cache]=1500 [tmp_table_size]=128M [innodb_file_per_table]=1
   [innodb_buffer_pool_size]=$INNODB_POOL [innodb_buffer_pool_instances]=8
+  [innodb_strict_mode]=0   # wide tables (e.g. price_quotations) fail with "Row size too large (> 8126)" otherwise
 )
 for k in "${!MYSQL_OPTS[@]}"; do
   if grep -qE "^\s*#?\s*${k}\s*=" "$MYCNF"; then
