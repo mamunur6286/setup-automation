@@ -19,7 +19,7 @@ The script must run as root. Press Enter to accept a default. Partway through, i
 | Git repository (SSH URL) | *(required)* |
 | Git branch | *(required)* |
 | Project folder in `/var/www` | `gormgv3` |
-| Laravel app subfolder in repo | `kingfisher` |
+| Laravel app subfolder in repo | `.` (repo root) |
 | Domain name | *(required)* |
 | Extra app port | `8085` |
 | phpMyAdmin port | `7070` |

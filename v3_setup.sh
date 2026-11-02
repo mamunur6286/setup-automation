@@ -67,7 +67,8 @@ echo
 ask GIT_REPO     "Git repository (SSH URL, e.g. git@github.com:owner/repo.git)"
 ask GIT_BRANCH   "Git branch"
 ask PROJECT_DIR  "Project folder name inside /var/www"        "gormgv3"
-ask APP_SUBDIR   "Laravel app subfolder inside repo (blank = repo root)" "kingfisher"
+ask APP_SUBDIR   "Laravel app subfolder inside repo ('.' = repo root)" "."
+[[ $APP_SUBDIR == . ]] && APP_SUBDIR=""
 ask DOMAIN       "Domain name (e.g. gormgv3-staging.skylarksoft.net)"
 ask APP_PORT     "Extra port for the app"                     "8085"
 ask PMA_PORT     "phpMyAdmin port"                            "7070"
@@ -158,6 +159,10 @@ if [[ -d $REPO_PATH/.git ]]; then
   git -C "$REPO_PATH" fetch --all && git -C "$REPO_PATH" checkout "$GIT_BRANCH" && git -C "$REPO_PATH" pull
 else
   git clone -b "$GIT_BRANCH" "$GIT_REPO" "$REPO_PATH"
+fi
+if [[ ! -f $APP_PATH/artisan && -f $REPO_PATH/artisan ]]; then
+  warn "No artisan in $APP_PATH - using repo root $REPO_PATH instead"
+  APP_SUBDIR=""; APP_PATH=$REPO_PATH
 fi
 [[ -f $APP_PATH/artisan ]] || die "No artisan file found in $APP_PATH - check the app subfolder name."
 ok "Repository ready at $REPO_PATH"
