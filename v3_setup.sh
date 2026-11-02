@@ -423,7 +423,12 @@ ok "Redis ready"
 s_laravel() {
 step "Configuring Laravel app"
 cd "$APP_PATH"
-[[ -f .env ]] || cp .env.example .env
+if [[ ! -f .env ]]; then
+  if [[ -f .env.example ]]; then cp .env.example .env
+  else warn "No .env or .env.example in $APP_PATH - creating a minimal .env (review it after setup)"; : > .env
+  fi
+fi
+grep -qE '^APP_KEY=' .env || echo "APP_KEY=" >> .env   # key:generate needs the line to exist
 set_env DB_CONNECTION mysql       .env
 set_env DB_HOST       127.0.0.1   .env
 set_env DB_PORT       3306        .env
