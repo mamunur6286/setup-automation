@@ -18,7 +18,7 @@ step()  { echo -e "\n${BLUE}==> $*${NC}"; }
 ok()    { echo -e "${GREEN}✔ $*${NC}"; }
 warn()  { echo -e "${YELLOW}⚠ $*${NC}"; }
 die()   { echo -e "${RED}✘ $*${NC}"; exit 1; }
-trap 'die "Failed at line $LINENO. See log: $LOG_FILE"' ERR
+trap 'die "Failed at line $LINENO. See log: $LOG_FILE - run the script again to resume from this step"' ERR
 
 ask() {            # ask VAR "Question" "default"
   local __var=$1 __q=$2 __def=${3:-} __ans
@@ -56,11 +56,38 @@ set_ini() {        # set_ini KEY VALUE FILE
 [[ $EUID -eq 0 ]] || die "Run as root:  sudo bash $0"
 REAL_USER=${SUDO_USER:-root}
 
+# ---------- resume cache (answers + finished steps, next to this script) -----
+CACHE_DIR="$(cd "$(dirname "$0")" && pwd)/.v3_setup_cache"
+ANSWERS="$CACHE_DIR/answers.env"     # contains the DB password - chmod 600
+DONE="$CACHE_DIR/done_steps"
+ANSWER_VARS=(GIT_REPO GIT_BRANCH PROJECT_DIR APP_SUBDIR DOMAIN APP_PORT PMA_PORT PMA_VERSION
+             DB_NAME DB_USER DB_PASS INNODB_POOL SQL_DUMP INSTALL_SUPERVISOR INSTALL_CRON
+             CRON_QUEUE RUN_PROTRACKER)
+save_answers() { mkdir -p "$CACHE_DIR"; chmod 700 "$CACHE_DIR"; declare -p "${ANSWER_VARS[@]}" > "$ANSWERS"; chmod 600 "$ANSWERS"; }
+run() {            # run STEP_FUNCTION  - skips steps finished in an earlier run
+  if grep -qx "$1" "$DONE" 2>/dev/null; then ok "Skipping '$1' (done in earlier run)"; return; fi
+  "$1"
+  echo "$1" >> "$DONE"
+}
+KEY=/root/.ssh/id_ed25519
+
 # =============================================================================
 #  1. COLLECT INFORMATION
 # =============================================================================
 clear
 echo -e "${BLUE}=============== V3 Server Setup ===============${NC}"
+
+RESUME=no
+if [[ -f $ANSWERS ]]; then
+  echo "Previous setup did not finish. Finished steps: $(paste -sd' ' "$DONE" 2>/dev/null || echo none)"
+  if ask_yn "Resume it (reuse answers, continue from the failed step)?" y; then
+    RESUME=yes; source "$ANSWERS"
+  else
+    rm -rf "$CACHE_DIR"
+  fi
+fi
+
+if [[ $RESUME == no ]]; then
 echo "Answer the questions below (press Enter to accept default)."
 echo
 
@@ -84,6 +111,7 @@ INSTALL_SUPERVISOR=no; ask_yn "Setup Supervisor + Horizon?" y && INSTALL_SUPERVI
 INSTALL_CRON=no;       ask_yn "Setup cron for schedule:run?" y && INSTALL_CRON=yes
 CRON_QUEUE=no;         ask_yn "Also add queue:work cron (not needed if Horizon runs)?" n && CRON_QUEUE=yes
 RUN_PROTRACKER=no;     ask_yn "Run 'php artisan generate:protracker-views-table' at the end?" y && RUN_PROTRACKER=yes
+fi
 
 REPO_PATH="/var/www/${PROJECT_DIR}"
 APP_PATH="${REPO_PATH}${APP_SUBDIR:+/$APP_SUBDIR}"
@@ -99,12 +127,14 @@ echo "  Database    : $DB_NAME / user $DB_USER"
 echo "  SQL import  : ${SQL_DUMP:-skip}"
 echo
 ask_yn "Proceed?" y || die "Aborted by user."
+save_answers
 
 export DEBIAN_FRONTEND=noninteractive
 
 # =============================================================================
 #  2. SYSTEM UPDATE + BASE PACKAGES
 # =============================================================================
+s_system() {
 step "Updating system"
 apt-get update -y && apt-get upgrade -y
 ok "System updated"
@@ -126,11 +156,12 @@ fi
 systemctl enable --now nginx
 ok "Base packages installed"
 
+}
 # =============================================================================
 #  3. SSH KEY FOR GITHUB
 # =============================================================================
+s_ssh_key() {
 step "Setting up SSH key for GitHub"
-KEY=/root/.ssh/id_ed25519
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 [[ -f $KEY ]] || ssh-keygen -t ed25519 -N "" -f "$KEY" -C "$(hostname)-deploy"
 GIT_HOST=$(echo "$GIT_REPO" | sed -E 's|^[^@]+@([^:]+):.*|\1|')
@@ -150,9 +181,11 @@ while true; do
   warn "Cannot authenticate to $GIT_HOST yet. Check the key and try again."
 done
 
+}
 # =============================================================================
 #  4. CLONE REPOSITORY
 # =============================================================================
+s_clone() {
 step "Cloning repository"
 if [[ -d $REPO_PATH/.git ]]; then
   warn "$REPO_PATH already exists - pulling latest"
@@ -162,14 +195,16 @@ else
 fi
 if [[ ! -f $APP_PATH/artisan && -f $REPO_PATH/artisan ]]; then
   warn "No artisan in $APP_PATH - using repo root $REPO_PATH instead"
-  APP_SUBDIR=""; APP_PATH=$REPO_PATH
+  APP_SUBDIR=""; APP_PATH=$REPO_PATH; save_answers
 fi
 [[ -f $APP_PATH/artisan ]] || die "No artisan file found in $APP_PATH - check the app subfolder name."
 ok "Repository ready at $REPO_PATH"
 
+}
 # =============================================================================
 #  5. PHP 8.3 + EXTENSIONS
 # =============================================================================
+s_php() {
 step "Installing PHP 8.3"
 # no "php8.3" meta-package: it can pull in apache2 (libapache2-mod-php). nginx + fpm only.
 PHP_PKGS=(php8.3-cli php8.3-fpm php8.3-curl php8.3-mbstring php8.3-zip php8.3-xml \
@@ -208,9 +243,11 @@ done
 systemctl restart php8.3-fpm
 ok "php.ini tuned"
 
+}
 # =============================================================================
 #  6. COMPOSER
 # =============================================================================
+s_composer() {
 step "Installing Composer"
 if ! command -v composer >/dev/null; then
   curl -sS https://getcomposer.org/installer | php
@@ -219,9 +256,11 @@ fi
 composer --version
 ok "Composer ready"
 
+}
 # =============================================================================
 #  7. MYSQL
 # =============================================================================
+s_mysql() {
 step "Installing MySQL"
 apt-get install -y mysql-server
 systemctl enable --now mysql
@@ -256,9 +295,11 @@ done
 systemctl restart mysql
 ok "MySQL tuned and restarted"
 
+}
 # =============================================================================
 #  8. PHPMYADMIN
 # =============================================================================
+s_phpmyadmin() {
 step "Installing phpMyAdmin $PMA_VERSION"
 if [[ ! -d /usr/share/phpmyadmin ]]; then
   cd /tmp
@@ -294,9 +335,11 @@ NGINX
 ln -sfn /etc/nginx/sites-available/phpmyadmin /etc/nginx/sites-enabled/phpmyadmin
 ok "phpMyAdmin configured on port $PMA_PORT"
 
+}
 # =============================================================================
 #  9. NGINX FOR PROJECT
 # =============================================================================
+s_nginx() {
 step "Creating nginx config for $DOMAIN"
 cat > "/etc/nginx/sites-available/${DOMAIN}" <<NGINX
 server {
@@ -333,9 +376,11 @@ nginx -t
 systemctl restart nginx
 ok "nginx configured"
 
+}
 # =============================================================================
 # 10. WKHTMLTOPDF
 # =============================================================================
+s_wkhtmltopdf() {
 step "Installing wkhtmltopdf"
 if ! command -v wkhtmltopdf >/dev/null; then
   cd /tmp
@@ -356,18 +401,22 @@ if ! command -v wkhtmltopdf >/dev/null; then
 fi
 wkhtmltopdf --version || warn "wkhtmltopdf install failed - install manually"
 
+}
 # =============================================================================
 # 11. REDIS
 # =============================================================================
+s_redis() {
 step "Installing Redis"
 apt-get install -y redis-server
 systemctl enable --now redis-server
 redis-cli --version
 ok "Redis ready"
 
+}
 # =============================================================================
 # 12. LARAVEL: .env, composer, permissions, storage link
 # =============================================================================
+s_laravel() {
 step "Configuring Laravel app"
 cd "$APP_PATH"
 [[ -f .env ]] || cp .env.example .env
@@ -392,9 +441,11 @@ git config --global --add safe.directory "$REPO_PATH"
 sudo -u www-data php artisan storage:link || warn "storage link already exists"
 ok "Laravel configured"
 
+}
 # =============================================================================
 # 13. DATABASE IMPORT (optional)
 # =============================================================================
+s_db_import() {
 if [[ -n $SQL_DUMP ]]; then
   step "Importing $SQL_DUMP into $DB_NAME"
   [[ -f $SQL_DUMP ]] || die "SQL file not found: $SQL_DUMP"
@@ -402,9 +453,11 @@ if [[ -n $SQL_DUMP ]]; then
   ok "Database imported"
 fi
 
+}
 # =============================================================================
 # 14. SUPERVISOR (Horizon)
 # =============================================================================
+s_supervisor() {
 if [[ $INSTALL_SUPERVISOR == yes ]]; then
   step "Installing Supervisor for Horizon"
   apt-get install -y supervisor
@@ -430,9 +483,11 @@ CONF
   ok "Supervisor running"
 fi
 
+}
 # =============================================================================
 # 15. CRON
 # =============================================================================
+s_cron() {
 if [[ $INSTALL_CRON == yes ]]; then
   step "Setting up cron"
   {
@@ -444,9 +499,11 @@ if [[ $INSTALL_CRON == yes ]]; then
   ok "Cron installed (/etc/cron.d/${PROJECT_DIR}-laravel)"
 fi
 
+}
 # =============================================================================
 # 16. FINAL ARTISAN COMMANDS
 # =============================================================================
+s_final() {
 if [[ $RUN_PROTRACKER == yes ]]; then
   step "Running generate:protracker-views-table"
   cd "$APP_PATH"
@@ -454,6 +511,26 @@ if [[ $RUN_PROTRACKER == yes ]]; then
 fi
 cd "$APP_PATH"
 sudo -u www-data php artisan optimize:clear || true
+
+}
+
+# ---------- run steps (finished ones are skipped on resume) ------------------
+run s_system
+run s_ssh_key
+run s_clone
+run s_php
+run s_composer
+run s_mysql
+run s_phpmyadmin
+run s_nginx
+run s_wkhtmltopdf
+run s_redis
+run s_laravel
+run s_db_import
+run s_supervisor
+run s_cron
+run s_final
+rm -rf "$CACHE_DIR"   # all done - drop cached answers (has DB password)
 
 # =============================================================================
 echo

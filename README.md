@@ -47,6 +47,12 @@ Then yes/no questions: Supervisor + Horizon, cron for `schedule:run`, cron for `
 
 The full output is logged to `/var/log/v3_setup_<timestamp>.log`.
 
+## Resume after an error
+
+Your answers and each finished step are saved in `.v3_setup_cache/` next to the script. If a step fails, fix the problem and run the script again. Answer **y** to "Resume it?" and it continues from the failed step without asking the questions again. Answer **n** to start over.
+
+The cache holds the database password (file mode 600). It is deleted automatically when setup finishes.
+
 ## After setup
 
 - Point the domain's DNS to the server IP.
