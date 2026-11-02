@@ -48,6 +48,16 @@ set_env() {        # set_env KEY VALUE FILE  (safe with special characters)
     echo "${k}=${v}" >> "$f"
   fi
 }
+apt_install() {    # apt_install PKG...  - skips packages already installed at the candidate version
+  local p inst cand need=()
+  for p in "$@"; do
+    inst=$(dpkg-query -W -f='${db:Status-Abbrev}${Version}' "$p" 2>/dev/null || true)
+    cand=$(apt-cache policy "$p" 2>/dev/null | awk '/Candidate:/{print $2}')
+    if [[ $inst == "ii "* && ${inst#ii } == "$cand" ]]; then echo "  = $p ${cand} already installed - skip"
+    else need+=("$p"); fi
+  done
+  (( ${#need[@]} == 0 )) || apt-get install -y "${need[@]}"
+}
 set_ini() {        # set_ini KEY VALUE FILE
   sed -i -E "s|^;?\s*${1}\s*=.*|${1} = ${2}|" "$3"
   grep -qE "^${1} =" "$3" || echo "${1} = ${2}" >> "$3"
@@ -65,7 +75,7 @@ ANSWERS="$CACHE_DIR/answers.env"     # contains the DB password - chmod 600
 DONE="$CACHE_DIR/done_steps"
 ANSWER_VARS=(GIT_REPO GIT_BRANCH PROJECT_DIR APP_SUBDIR DOMAIN APP_PORT PMA_PORT PMA_VERSION
              DB_NAME DB_USER DB_PASS INNODB_POOL SQL_DUMP INSTALL_SUPERVISOR INSTALL_CRON
-             CRON_QUEUE RUN_PROTRACKER)
+             CRON_QUEUE RUN_PROTRACKER RUN_MIGRATE RUN_BOOT)
 save_answers() { mkdir -p "$CACHE_DIR"; chmod 700 "$CACHE_DIR"; declare -p "${ANSWER_VARS[@]}" > "$ANSWERS"; chmod 600 "$ANSWERS"; }
 run() {            # run STEP_FUNCTION  - skips steps finished in an earlier run
   if grep -qx "$1" "$DONE" 2>/dev/null; then ok "Skipping '$1' (done in earlier run)"; return; fi
@@ -107,14 +117,23 @@ ask DB_NAME      "Database name"                              "gormgv3"
 ask DB_USER      "Database user"                              "dbAdmin"
 ask_secret DB_PASS "Database password"
 ask INNODB_POOL  "innodb_buffer_pool_size (≈50% of RAM)"      "2G"
-ask SQL_DUMP     "Path to .sql dump on THIS server to import (blank = skip)" " "
-SQL_DUMP=$(echo "$SQL_DUMP" | xargs)
+# boot:application = fresh install (migrate:fresh + seed + protracker). It replaces SQL import / migrate.
+RUN_BOOT=no; ask_yn "Fresh install: run 'php artisan boot:application'? (WIPES the database)" n && RUN_BOOT=yes
+SQL_DUMP=""; RUN_MIGRATE=no; RUN_PROTRACKER=no
+if [[ $RUN_BOOT == no ]]; then
+  ask SQL_DUMP   "Path to .sql dump on THIS server to import (blank = skip)" " "
+  SQL_DUMP=$(echo "$SQL_DUMP" | xargs)
+fi
 
 INSTALL_SUPERVISOR=no; ask_yn "Setup Supervisor + Horizon?" y && INSTALL_SUPERVISOR=yes
 INSTALL_CRON=no;       ask_yn "Setup cron for schedule:run?" y && INSTALL_CRON=yes
 CRON_QUEUE=no;         ask_yn "Also add queue:work cron (not needed if Horizon runs)?" n && CRON_QUEUE=yes
-RUN_PROTRACKER=no;     ask_yn "Run 'php artisan generate:protracker-views-table' at the end?" y && RUN_PROTRACKER=yes
+if [[ $RUN_BOOT == no ]]; then
+  ask_yn "Run 'php artisan migrate --force' after .env is ready (and after SQL import)?" y && RUN_MIGRATE=yes
+  ask_yn "Run 'php artisan generate:protracker-views-table' at the end?" y && RUN_PROTRACKER=yes
 fi
+fi
+RUN_MIGRATE=${RUN_MIGRATE:-no}; RUN_BOOT=${RUN_BOOT:-no}   # answers cached by older versions lack these
 
 REPO_PATH="/var/www/${PROJECT_DIR}"
 APP_PATH="${REPO_PATH}${APP_SUBDIR:+/$APP_SUBDIR}"
@@ -128,6 +147,7 @@ echo "  Domain      : $DOMAIN  (ports 80, $APP_PORT)"
 echo "  phpMyAdmin  : port $PMA_PORT"
 echo "  Database    : $DB_NAME / user $DB_USER"
 echo "  SQL import  : ${SQL_DUMP:-skip}"
+echo "  Boot app    : $RUN_BOOT  (yes = boot:application, wipes DB)"
 echo
 ask_yn "Proceed?" y || die "Aborted by user."
 save_answers
@@ -149,7 +169,7 @@ chmod 775 /var/www
 ok "/var/www ready"
 
 step "Installing nginx, curl, unzip, git"
-apt-get install -y nginx unzip curl git software-properties-common ca-certificates
+apt_install nginx unzip curl git software-properties-common ca-certificates
 if dpkg -s apache2 >/dev/null 2>&1; then
   warn "apache2 found - removing it (conflicts with nginx on port 80)"
   systemctl stop apache2 || true
@@ -228,8 +248,8 @@ if ! apt-cache show php8.3-fpm >/dev/null 2>&1; then
   apt-get update -y
   apt-cache show php8.3-fpm >/dev/null 2>&1 || die "PHP 8.3 still not found after adding ppa:ondrej/php - check the apt update output above."
 fi
-apt-get install -y "${PHP_PKGS[@]}"
-apt-get install -y php8.3-redis || warn "php8.3-redis not available (fine if project uses predis)"
+apt_install "${PHP_PKGS[@]}"
+apt_install php8.3-redis || warn "php8.3-redis not available (fine if project uses predis)"
 # safety net: never keep apache, nginx serves the app
 dpkg -s apache2 >/dev/null 2>&1 && { systemctl stop apache2 || true; apt-get purge -y apache2 apache2-bin || true; }
 systemctl enable --now php8.3-fpm
@@ -266,7 +286,7 @@ ok "Composer ready"
 # =============================================================================
 s_mysql() {
 step "Installing MySQL"
-apt-get install -y mysql-server
+apt_install mysql-server
 systemctl enable --now mysql
 
 DB_PASS_SQL=${DB_PASS//\'/\'\'}   # escape single quotes for SQL
@@ -305,7 +325,13 @@ ok "MySQL tuned and restarted"
 # =============================================================================
 s_phpmyadmin() {
 step "Installing phpMyAdmin $PMA_VERSION"
-if [[ ! -d /usr/share/phpmyadmin ]]; then
+if [[ -f /usr/share/phpmyadmin/RELEASE-DATE-${PMA_VERSION} ]]; then
+  echo "  = phpMyAdmin ${PMA_VERSION} already installed - skip download"
+else
+  if [[ -d /usr/share/phpmyadmin ]]; then
+    warn "Other phpMyAdmin version found - moving it to /usr/share/phpmyadmin.bak-$(date +%s)"
+    mv /usr/share/phpmyadmin "/usr/share/phpmyadmin.bak-$(date +%s)"
+  fi
   cd /tmp
   wget -q "https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
   tar -xzf "phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
@@ -411,7 +437,7 @@ wkhtmltopdf --version || warn "wkhtmltopdf install failed - install manually"
 # =============================================================================
 s_redis() {
 step "Installing Redis"
-apt-get install -y redis-server
+apt_install redis-server
 systemctl enable --now redis-server
 redis-cli --version
 ok "Redis ready"
@@ -436,6 +462,16 @@ set_env DB_DATABASE   "$DB_NAME"  .env
 set_env DB_USERNAME   "$DB_USER"  .env
 set_env DB_PASSWORD   "'${DB_PASS}'" .env
 set_env APP_URL       "http://${DOMAIN}" .env
+# .env.example is written for docker (hosts "database" / "redis") - point them at this server
+set_env DB_HOST_FOR_REPORT     127.0.0.1      .env
+set_env DB_USERNAME_FOR_REPORT "$DB_USER"     .env
+set_env DB_PASSWORD_FOR_REPORT "'${DB_PASS}'" .env
+set_env REDIS_HOST             127.0.0.1      .env
+REPORT_DB=$(grep -E '^DB_DATABASE_FOR_REPORT=' .env | cut -d= -f2- | tr -d "\"'" || true)
+if [[ -n $REPORT_DB ]]; then
+  mysql --user=root -e "CREATE DATABASE IF NOT EXISTS \`${REPORT_DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  ok "Report database '${REPORT_DB}' ready"
+fi
 
 export COMPOSER_ALLOW_SUPERUSER=1
 composer install --no-interaction --prefer-dist --optimize-autoloader
@@ -469,7 +505,7 @@ fi
 s_supervisor() {
 if [[ $INSTALL_SUPERVISOR == yes ]]; then
   step "Installing Supervisor for Horizon"
-  apt-get install -y supervisor
+  apt_install supervisor
   cat > /etc/supervisor/conf.d/kingfisher-worker.conf <<CONF
 [program:kingfisher-worker]
 process_name=%(program_name)s_%(process_num)02d
@@ -512,6 +548,20 @@ fi
 # =============================================================================
 # 16. FINAL ARTISAN COMMANDS
 # =============================================================================
+s_boot() {
+step "Booting application (artisan)"
+cd "$APP_PATH"
+if [[ $RUN_BOOT == yes ]]; then
+  warn "boot:application wipes the main + report databases and asks for company/unit details"
+  # interactive (Laravel Prompts) - talk to the terminal directly, not through the log pipe
+  sudo -u www-data php artisan boot:application </dev/tty >/dev/tty 2>&1
+elif [[ $RUN_MIGRATE == yes ]]; then
+  sudo -u www-data php artisan migrate --force
+fi
+sudo -u www-data php artisan optimize:clear
+ok "Application booted"
+}
+
 s_final() {
 if [[ $RUN_PROTRACKER == yes ]]; then
   step "Running generate:protracker-views-table"
@@ -536,6 +586,7 @@ run s_wkhtmltopdf
 run s_redis
 run s_laravel
 run s_db_import
+run s_boot
 run s_supervisor
 run s_cron
 run s_final

@@ -29,7 +29,11 @@ The script must run as root. Press Enter to accept a default. Partway through, i
 | `innodb_buffer_pool_size` | `2G` (about 50% of RAM) |
 | SQL dump to import | blank = skip |
 
-Then yes/no questions: Supervisor + Horizon, cron for `schedule:run`, cron for `queue:work`, and running `generate:protracker-views-table`.
+Then yes/no questions:
+
+- **Fresh install** with `php artisan boot:application`. This **wipes the main and report databases**. It asks for company and unit details, seeds the data and runs protracker. If you choose it, the script skips the SQL import, migrate and protracker questions.
+- Supervisor + Horizon, cron for `schedule:run`, cron for `queue:work`.
+- Otherwise: `php artisan migrate --force` and `generate:protracker-views-table`.
 
 ## What it does
 
@@ -42,8 +46,11 @@ Then yes/no questions: Supervisor + Horizon, cron for `schedule:run`, cron for `
 7. Installs phpMyAdmin on its own port.
 8. Sets up an nginx site for the domain and the extra port.
 9. Installs wkhtmltopdf and Redis.
-10. Configures Laravel: writes `.env`, runs `composer install`, generates the app key, sets permissions and runs `storage:link`.
-11. Optionally imports the SQL dump, sets up Supervisor/Horizon and cron, and runs `generate:protracker-views-table`.
+10. Configures Laravel: writes `.env` (DB, report DB and Redis point to this server; creates the report DB), runs `composer install`, generates the app key, sets permissions and runs `storage:link`.
+11. Boots the app: either `boot:application` (fresh install), or the SQL import followed by `migrate --force`. Then it runs `optimize:clear`.
+12. Optionally sets up Supervisor/Horizon and cron, and runs `generate:protracker-views-table`.
+
+Packages already installed at the same version are skipped, and so is phpMyAdmin if the same version is already there. Anything missing or at a different version is installed.
 
 The full output is logged to `/var/log/v3_setup_<timestamp>.log`.
 
