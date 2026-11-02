@@ -174,12 +174,12 @@ step "Installing PHP 8.3"
 PHP_PKGS=(php8.3 php8.3-cli php8.3-fpm php8.3-curl php8.3-mbstring php8.3-zip php8.3-xml \
           php8.3-gd php8.3-opcache php8.3-mysql php8.3-xsl php8.3-common php8.3-intl \
           php8.3-bcmath php8.3-sqlite3)
-if ! apt-get install -y "${PHP_PKGS[@]}"; then
-  warn "Default repo failed - adding ppa:ondrej/php"
-  add-apt-repository ppa:ondrej/php -y
+if ! apt-cache show php8.3-fpm >/dev/null 2>&1; then
+  warn "PHP 8.3 not in default repo - adding ppa:ondrej/php"
+  LC_ALL=C.UTF-8 add-apt-repository ppa:ondrej/php -y   # PPA needs a UTF-8 locale
   apt-get update -y
-  apt-get install -y "${PHP_PKGS[@]}"
 fi
+apt-get install -y "${PHP_PKGS[@]}"
 apt-get install -y php8.3-redis || warn "php8.3-redis not available (fine if project uses predis)"
 # make sure apache wasn't pulled in by the php meta-package
 dpkg -l | grep -q '^ii\s*apache2 ' && { systemctl stop apache2 || true; apt-get purge -y apache2 apache2-bin || true; }
