@@ -63,8 +63,8 @@ echo -e "${BLUE}=============== V3 Server Setup ===============${NC}"
 echo "Answer the questions below (press Enter to accept default)."
 echo
 
-ask GIT_REPO     "Git repository (SSH URL)"                   "git@gitlab.com:skylarksoft/erp-pn.git"
-ask GIT_BRANCH   "Git branch"                                 "gormgv3"
+ask GIT_REPO     "Git repository (SSH URL, e.g. git@gitlab.com:group/repo.git)"
+ask GIT_BRANCH   "Git branch"
 ask PROJECT_DIR  "Project folder name inside /var/www"        "gormgv3"
 ask APP_SUBDIR   "Laravel app subfolder inside repo (blank = repo root)" "kingfisher"
 ask DOMAIN       "Domain name (e.g. gormgv3-staging.skylarksoft.net)"
