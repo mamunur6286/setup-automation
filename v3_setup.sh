@@ -64,7 +64,7 @@ echo -e "${BLUE}=============== V3 Server Setup ===============${NC}"
 echo "Answer the questions below (press Enter to accept default)."
 echo
 
-ask GIT_REPO     "Git repository (SSH URL, e.g. git@gitlab.com:group/repo.git)"
+ask GIT_REPO     "Git repository (SSH URL, e.g. git@github.com:owner/repo.git)"
 ask GIT_BRANCH   "Git branch"
 ask PROJECT_DIR  "Project folder name inside /var/www"        "gormgv3"
 ask APP_SUBDIR   "Laravel app subfolder inside repo (blank = repo root)" "kingfisher"
@@ -126,23 +126,23 @@ systemctl enable --now nginx
 ok "Base packages installed"
 
 # =============================================================================
-#  3. SSH KEY FOR GITLAB
+#  3. SSH KEY FOR GITHUB
 # =============================================================================
-step "Setting up SSH key for GitLab"
+step "Setting up SSH key for GitHub"
 KEY=/root/.ssh/id_ed25519
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 [[ -f $KEY ]] || ssh-keygen -t ed25519 -N "" -f "$KEY" -C "$(hostname)-deploy"
 GIT_HOST=$(echo "$GIT_REPO" | sed -E 's|^[^@]+@([^:]+):.*|\1|')
 ssh-keyscan -H "$GIT_HOST" >> /root/.ssh/known_hosts 2>/dev/null
 echo
-echo -e "${YELLOW}Add this public key to GitLab (Repo > Settings > Repository > Deploy keys, or your profile SSH keys):${NC}"
+echo -e "${YELLOW}Add this public key to GitHub (Repo > Settings > Deploy keys > Add deploy key, or your account Settings > SSH and GPG keys):${NC}"
 echo "--------------------------------------------------------------------------"
 cat "${KEY}.pub"
 echo "--------------------------------------------------------------------------"
 while true; do
-  read -rp "Press Enter after adding the key to GitLab..."
+  read -rp "Press Enter after adding the key to GitHub..."
   if ssh -o BatchMode=yes -T "git@${GIT_HOST}" 2>&1 | grep -qiE "welcome|successfully"; then
-    ok "GitLab SSH access confirmed"; break
+    ok "GitHub SSH access confirmed"; break
   fi
   warn "Cannot authenticate to $GIT_HOST yet. Check the key and try again."
 done

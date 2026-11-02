@@ -10,7 +10,7 @@ Tested on Ubuntu 22.04 and 24.04.
 sudo bash v3_setup.sh
 ```
 
-The script must run as root. Press Enter to accept a default. Partway through, it prints an SSH public key. Add that key to GitLab (as a deploy key or a profile SSH key) so the script can clone the repo.
+The script must run as root. Press Enter to accept a default. Partway through, it prints an SSH public key. Add that key to GitHub (as a repo deploy key or an account SSH key) so the script can clone the repo.
 
 ## Prompts
 
@@ -34,7 +34,7 @@ Then yes/no questions: Supervisor + Horizon, cron for `schedule:run`, cron for `
 ## What it does
 
 1. Updates the system and installs nginx, git, curl and unzip. Removes Apache if present.
-2. Creates an SSH key for GitLab and waits until access works.
+2. Creates an SSH key for GitHub and waits until access works.
 3. Clones the repo into `/var/www/<project>`.
 4. Installs PHP 8.3 with FPM and its extensions (uses `ppa:ondrej/php` if needed), then tunes `php.ini`.
 5. Installs Composer.
