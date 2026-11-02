@@ -233,6 +233,7 @@ apt-get install -y php8.3-redis || warn "php8.3-redis not available (fine if pro
 # safety net: never keep apache, nginx serves the app
 dpkg -l | grep -q '^ii\s*apache2 ' && { systemctl stop apache2 || true; apt-get purge -y apache2 apache2-bin || true; }
 systemctl enable --now php8.3-fpm
+update-alternatives --set php /usr/bin/php8.3   # older PHP (e.g. 8.1) may already own the `php` command
 [[ $(php -r 'echo PHP_VERSION;') == 8.3.* ]] || die "Expected PHP 8.3.x, got $(php -r 'echo PHP_VERSION;')"
 ok "PHP $(php -r 'echo PHP_VERSION;') installed"
 
