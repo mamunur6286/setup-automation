@@ -150,7 +150,7 @@ ok "/var/www ready"
 
 step "Installing nginx, curl, unzip, git"
 apt-get install -y nginx unzip curl git software-properties-common ca-certificates
-if dpkg -l | grep -q '^ii\s*apache2 '; then
+if dpkg -s apache2 >/dev/null 2>&1; then
   warn "apache2 found - removing it (conflicts with nginx on port 80)"
   systemctl stop apache2 || true
   apt-get purge -y apache2 apache2-utils apache2-bin || true
@@ -231,7 +231,7 @@ fi
 apt-get install -y "${PHP_PKGS[@]}"
 apt-get install -y php8.3-redis || warn "php8.3-redis not available (fine if project uses predis)"
 # safety net: never keep apache, nginx serves the app
-dpkg -l | grep -q '^ii\s*apache2 ' && { systemctl stop apache2 || true; apt-get purge -y apache2 apache2-bin || true; }
+dpkg -s apache2 >/dev/null 2>&1 && { systemctl stop apache2 || true; apt-get purge -y apache2 apache2-bin || true; }
 systemctl enable --now php8.3-fpm
 update-alternatives --set php /usr/bin/php8.3   # older PHP (e.g. 8.1) may already own the `php` command
 [[ $(php -r 'echo PHP_VERSION;') == 8.3.* ]] || die "Expected PHP 8.3.x, got $(php -r 'echo PHP_VERSION;')"
@@ -313,7 +313,7 @@ if [[ ! -d /usr/share/phpmyadmin ]]; then
   rm -f "phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
 fi
 cp -n /usr/share/phpmyadmin/config.sample.inc.php /usr/share/phpmyadmin/config.inc.php || true
-BLOWFISH=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+BLOWFISH=$(openssl rand -hex 16)   # 32 chars; `tr </dev/urandom | head` breaks under pipefail
 sed -i "s|\$cfg\['blowfish_secret'\] = '.*';|\$cfg['blowfish_secret'] = '${BLOWFISH}';|" /usr/share/phpmyadmin/config.inc.php
 mkdir -p /usr/share/phpmyadmin/tmp
 chown -R www-data:www-data /usr/share/phpmyadmin
