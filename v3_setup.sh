@@ -178,6 +178,8 @@ if ! apt-cache show php8.3-fpm >/dev/null 2>&1; then
   warn "PHP 8.3 not in default repo - adding ppa:ondrej/php"
   LC_ALL=C.UTF-8 add-apt-repository ppa:ondrej/php -y   # PPA needs a UTF-8 locale
   apt-get update -y
+  apt-cache show php8.3-fpm >/dev/null 2>&1 \
+    || die "PHP 8.3 still not found after adding the PPA. OS: $(. /etc/os-release; echo "$PRETTY_NAME"). ppa:ondrej/php only supports current Ubuntu LTS (22.04 / 24.04)."
 fi
 apt-get install -y "${PHP_PKGS[@]}"
 apt-get install -y php8.3-redis || warn "php8.3-redis not available (fine if project uses predis)"
