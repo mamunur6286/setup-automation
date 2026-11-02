@@ -171,19 +171,29 @@ ok "Repository ready at $REPO_PATH"
 #  5. PHP 8.3 + EXTENSIONS
 # =============================================================================
 step "Installing PHP 8.3"
-PHP_PKGS=(php8.3 php8.3-cli php8.3-fpm php8.3-curl php8.3-mbstring php8.3-zip php8.3-xml \
+# no "php8.3" meta-package: it can pull in apache2 (libapache2-mod-php). nginx + fpm only.
+PHP_PKGS=(php8.3-cli php8.3-fpm php8.3-curl php8.3-mbstring php8.3-zip php8.3-xml \
           php8.3-gd php8.3-opcache php8.3-mysql php8.3-xsl php8.3-common php8.3-intl \
           php8.3-bcmath php8.3-sqlite3)
 if ! apt-cache show php8.3-fpm >/dev/null 2>&1; then
   warn "PHP 8.3 not in default repo - adding ppa:ondrej/php"
-  LC_ALL=C.UTF-8 add-apt-repository ppa:ondrej/php -y   # PPA needs a UTF-8 locale
+  # added by hand: add-apt-repository often fails the Launchpad lookup ("has no PPA named 'ubuntu/php'")
+  CODENAME=$(. /etc/os-release; echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+  FPR=$(curl -fsSL https://api.launchpad.net/1.0/~ondrej/+archive/ubuntu/php \
+        | grep -oE '"signing_key_fingerprint": *"[0-9A-F]+"' | grep -oE '[0-9A-F]{40}' || true)
+  FPR=${FPR:-14AA40EC0831756756D7F66C4F4EA0AAE5267A6C}
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${FPR}" \
+    | gpg --dearmor --yes -o /etc/apt/keyrings/ondrej-php.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/ondrej-php.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${CODENAME} main" \
+    > /etc/apt/sources.list.d/ondrej-php.list
   apt-get update -y
   apt-cache show php8.3-fpm >/dev/null 2>&1 \
     || die "PHP 8.3 still not found after adding the PPA. OS: $(. /etc/os-release; echo "$PRETTY_NAME"). ppa:ondrej/php only supports current Ubuntu LTS (22.04 / 24.04)."
 fi
 apt-get install -y "${PHP_PKGS[@]}"
 apt-get install -y php8.3-redis || warn "php8.3-redis not available (fine if project uses predis)"
-# make sure apache wasn't pulled in by the php meta-package
+# safety net: never keep apache, nginx serves the app
 dpkg -l | grep -q '^ii\s*apache2 ' && { systemctl stop apache2 || true; apt-get purge -y apache2 apache2-bin || true; }
 systemctl enable --now php8.3-fpm
 ok "PHP $(php -r 'echo PHP_VERSION;') installed"
