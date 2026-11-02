@@ -6,6 +6,7 @@
 #  Usage:   sudo bash v3_setup.sh
 #  Tested target: Ubuntu 22.04 / 24.04
 # =============================================================================
+[ -z "$BASH_VERSION" ] && exec bash "$0" "$@"   # re-run with bash if started via `sh`
 set -Eeuo pipefail
 
 LOG_FILE="/var/log/v3_setup_$(date +%Y%m%d_%H%M%S).log"
