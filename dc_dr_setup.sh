@@ -52,11 +52,12 @@ EOF
     echo "[INFO] Restarting MySQL service on Primary..."
     sudo systemctl restart mysql
     
-    # Verification step
-    *Verification:* Primary MySQL service Status active (running) এবং bind-address সঠিকভাবে সেট হয়েছে।
+    # Verification: MySQL active (running) এবং bind-address সঠিকভাবে সেট হয়েছে
+    systemctl is-active --quiet mysql || { echo "[ERROR] MySQL is not running on Primary"; exit 1; }
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@server_id, @@bind_address, @@gtid_mode, @@log_bin;"
 
     echo "[INFO] Creating RESTRICTED replication user on Primary..."
-    mysql -u"${MYSQL_USER}" -p"${MYSQL_PASS}" -e "
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "
         CREATE USER IF NOT EXISTS '${REPL_USER}'@'${DR_ALLOWED_HOST}' IDENTIFIED BY '${REPL_PASS}';
         GRANT REPLICATION SLAVE ON *.* TO '${REPL_USER}'@'${DR_ALLOWED_HOST}';
         ALTER USER '${REPL_USER}'@'${DR_ALLOWED_HOST}' REQUIRE SSL;
@@ -93,7 +94,7 @@ EOF
     sudo systemctl restart mysql
 
     echo "[INFO] Pointing DR Node to Primary DC securely..."
-    mysql -u"${MYSQL_USER}" -p"${MYSQL_PASS}" -e "
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "
         CHANGE REPLICATION SOURCE TO
             SOURCE_HOST='${PRIMARY_IP}',
             SOURCE_PORT=3306,
@@ -107,7 +108,7 @@ EOF
     "
 
     echo "[INFO] DR DC configured. Current Replica Status:"
-    mysql -u"${MYSQL_USER}" -p"${MYSQL_PASS}" -e "SHOW REPLICA STATUS\G"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SHOW REPLICA STATUS\G"
 }
 
 # ------------------------------------------------------------------------------
@@ -115,7 +116,7 @@ EOF
 # ------------------------------------------------------------------------------
 check_status() {
     echo "=== DR Replication Status Check ==="
-    mysql -u"${MYSQL_USER}" -p"${MYSQL_PASS}" -e "SHOW REPLICA STATUS\G"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SHOW REPLICA STATUS\G"
 }
 
 # ------------------------------------------------------------------------------
