@@ -15,7 +15,7 @@ MYSQL_USER="root"
 MYSQL_PASS=""
 
 REPL_USER="repl_user"
-REPL_PASS="ReplSecurePassword123!"
+REPL_PASS="Pass@#$00rTy"
 
 # IP Address Configuration
 PRIMARY_IP="172.18.20.255"        # Primary DC Server IP
