@@ -35,6 +35,9 @@ configure_primary() {
     # MySQL Configuration Backup
     sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
 
+    # Re-run safe: আগের রান থেকে যোগ করা block মুছে ফেলা (block টি সবসময় ফাইলের শেষে থাকে)
+    sudo sed -i '/^# --- Primary DC (DC1) Configuration ---/,$d' "$CONFIG_FILE"
+
     # Append Secure Replication Configurations
     sudo bash -c "cat >> $CONFIG_FILE" <<EOF
 
@@ -56,6 +59,14 @@ EOF
     systemctl is-active --quiet mysql || { echo "[ERROR] MySQL is not running on Primary"; exit 1; }
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@server_id, @@bind_address, @@gtid_mode, @@log_bin;"
 
+    echo "[INFO] Removing old '${REPL_USER}' accounts (any host) on Primary..."
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -N -e \
+        "SELECT host FROM mysql.user WHERE user='${REPL_USER}';" |
+    while IFS= read -r old_host; do
+        echo "[INFO] Dropping '${REPL_USER}'@'${old_host}'"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "DROP USER IF EXISTS '${REPL_USER}'@'${old_host}';"
+    done
+
     echo "[INFO] Creating RESTRICTED replication user on Primary..."
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "
         CREATE USER IF NOT EXISTS '${REPL_USER}'@'${DR_ALLOWED_HOST}' IDENTIFIED BY '${REPL_PASS}';
@@ -76,6 +87,9 @@ configure_dr() {
     # MySQL Configuration Backup
     sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
 
+    # Re-run safe: আগের রান থেকে যোগ করা block মুছে ফেলা
+    sudo sed -i '/^# --- DR DC (DC2) Configuration ---/,$d' "$CONFIG_FILE"
+
     sudo bash -c "cat >> $CONFIG_FILE" <<EOF
 
 # --- DR DC (DC2) Configuration ---
@@ -94,7 +108,10 @@ EOF
     sudo systemctl restart mysql
 
     echo "[INFO] Pointing DR Node to Primary DC securely..."
+    # Replace any previous replication config (e.g. pointing to a wrong IP)
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "
+        STOP REPLICA;
+        RESET REPLICA ALL;
         CHANGE REPLICATION SOURCE TO
             SOURCE_HOST='${PRIMARY_IP}',
             SOURCE_PORT=3306,
