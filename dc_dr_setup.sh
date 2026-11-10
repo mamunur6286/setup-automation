@@ -18,11 +18,11 @@ REPL_USER="repl_user"
 REPL_PASS="Pass@#$00rTy"
 
 # IP Address Configuration
-PRIMARY_IP="172.18.20.255"        # Primary DC Server IP
-DR_IP="172.18.21.255"             # DR DC Server IP
+PRIMARY_IP="172.18.20.11"        # Primary DC Server IP
+DR_IP="172.18.21.11"             # DR DC Server IP
 
 # সিকিউরিটির জন্য DR IP / Subnet Restricted IP pattern
-DR_ALLOWED_HOST="172.18.21.255"   # '%' এর পরিবর্তে নির্দিষ্ট DR IP ব্যবহার করা হয়েছে
+DR_ALLOWED_HOST="172.18.21.11"   # '%' এর পরিবর্তে নির্দিষ্ট DR IP ব্যবহার করা হয়েছে
 
 CONFIG_FILE="/etc/mysql/mysql.conf.d/mysqld.cnf"
 
