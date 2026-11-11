@@ -79,6 +79,31 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# 1b. DUMP PRIMARY DATA (run on Primary, then copy the file to DR)
+# DR কে Primary এর বর্তমান data + GTID position দিয়ে শুরু করতে হবে, নাহলে
+# আগে থেকে থাকা database এর জন্য replication Error 1049 (Unknown database) দেয়
+# ------------------------------------------------------------------------------
+dump_primary() {
+    local out="${1:-/tmp/dc_dump.sql}"
+    # System schemas বাদ: DR এর নিজস্ব users/root login অক্ষত থাকবে
+    local dbs
+    dbs=$(mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -N -e \
+        "SELECT schema_name FROM information_schema.schemata
+         WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema');")
+    [ -n "$dbs" ] || { echo "[ERROR] No application databases found on Primary"; exit 1; }
+
+    echo "[INFO] Dumping databases: $(echo $dbs)"
+    # shellcheck disable=SC2086
+    mysqldump -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} \
+        --single-transaction --triggers --routines --events \
+        --set-gtid-purged=ON --add-drop-database --databases $dbs > "$out"
+
+    echo "[INFO] Dump written to $out"
+    echo "[NEXT] scp $out <user>@${DR_IP}:/tmp/dc_dump.sql"
+    echo "[NEXT] On DR: $0 setup-dr /tmp/dc_dump.sql"
+}
+
+# ------------------------------------------------------------------------------
 # 2. CONFIGURE DR DC NODE
 # ------------------------------------------------------------------------------
 configure_dr() {
@@ -107,11 +132,28 @@ EOF
     echo "[INFO] Restarting MySQL service on DR..."
     sudo systemctl restart mysql
 
-    echo "[INFO] Pointing DR Node to Primary DC securely..."
     # Replace any previous replication config (e.g. pointing to a wrong IP)
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "STOP REPLICA; RESET REPLICA ALL;"
+
+    local dump_file="${1:-}"
+    if [ -n "$dump_file" ]; then
+        [ -s "$dump_file" ] || { echo "[ERROR] Dump file '$dump_file' not found or empty"; exit 1; }
+        echo "[INFO] Loading Primary dump '$dump_file' into DR..."
+        # Dump এর GTID_PURGED সেট করতে DR এর gtid_executed খালি থাকতে হবে
+        # MySQL 8.4+: RESET BINARY LOGS AND GTIDS; পুরোনো version: RESET MASTER
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET BINARY LOGS AND GTIDS;" 2>/dev/null ||
+            mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET MASTER;"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = OFF;"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$dump_file"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
+    else
+        echo "[WARN] No dump file given. DR must already have Primary's data, or replication will fail (Error 1049/1146)."
+        echo "[WARN] First run on Primary: $0 dump-primary"
+    fi
+
+    echo "[INFO] Pointing DR Node to Primary DC securely..."
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "
-        STOP REPLICA;
-        RESET REPLICA ALL;
         CHANGE REPLICATION SOURCE TO
             SOURCE_HOST='${PRIMARY_IP}',
             SOURCE_PORT=3306,
@@ -143,14 +185,17 @@ case "${1:-}" in
     setup-primary)
         configure_primary
         ;;
+    dump-primary)
+        dump_primary "${2:-}"
+        ;;
     setup-dr)
-        configure_dr
+        configure_dr "${2:-}"
         ;;
     status)
         check_status
         ;;
     *)
-        echo "Usage: $0 {setup-primary|setup-dr|status}"
+        echo "Usage: $0 {setup-primary|dump-primary [out_file]|setup-dr [dump_file]|status}"
         exit 1
         ;;
 esac
