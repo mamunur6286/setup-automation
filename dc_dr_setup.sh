@@ -64,11 +64,13 @@ EOF
         "SELECT host FROM mysql.user WHERE user='${REPL_USER}';" |
     while IFS= read -r old_host; do
         echo "[INFO] Dropping '${REPL_USER}'@'${old_host}'"
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "DROP USER IF EXISTS '${REPL_USER}'@'${old_host}';"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET sql_log_bin=0; DROP USER IF EXISTS '${REPL_USER}'@'${old_host}';"
     done
 
+    # sql_log_bin=0: account changes must not replicate, DR lacks the mysql schema (Error 1396)
     echo "[INFO] Creating RESTRICTED replication user on Primary..."
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "
+        SET sql_log_bin=0;
         CREATE USER IF NOT EXISTS '${REPL_USER}'@'${DR_ALLOWED_HOST}' IDENTIFIED BY '${REPL_PASS}';
         GRANT REPLICATION SLAVE ON *.* TO '${REPL_USER}'@'${DR_ALLOWED_HOST}';
         ALTER USER '${REPL_USER}'@'${DR_ALLOWED_HOST}' REQUIRE SSL;
