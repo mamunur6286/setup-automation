@@ -106,7 +106,7 @@ dump_primary() {
     echo "[INFO] Copying dump to DR (${DR_SSH_USER}@${DR_IP}:${DR_SSH_PORT})..."
     scp -P "${DR_SSH_PORT}" "$out" "${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql" ||
         echo "[WARN] Auto copy failed. Copy manually: scp -P ${DR_SSH_PORT} $out ${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql"
-    echo "[NEXT] On DR: $0 setup-dr /tmp/dc_dump.sql"
+    echo "[NEXT] On DR: $0 setup-dr"
 }
 
 # ------------------------------------------------------------------------------
@@ -114,6 +114,10 @@ dump_primary() {
 # ------------------------------------------------------------------------------
 configure_dr() {
     echo "[INFO] Configuring DR DC Node ($DR_IP)..."
+
+    # DR নিজে কোনো database তৈরি করে না: DC এর dump import বাধ্যতামূলক (কিছু বদলানোর আগেই check)
+    local dump_file="${1:-/tmp/dc_dump.sql}"
+    [ -s "$dump_file" ] || { echo "[ERROR] DC dump '$dump_file' not found or empty. First run on Primary: $0 dump-primary"; exit 1; }
 
     # MySQL Configuration Backup
     sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
@@ -141,22 +145,15 @@ EOF
     # Replace any previous replication config (e.g. pointing to a wrong IP)
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "STOP REPLICA; RESET REPLICA ALL;"
 
-    local dump_file="${1:-}"
-    if [ -n "$dump_file" ]; then
-        [ -s "$dump_file" ] || { echo "[ERROR] Dump file '$dump_file' not found or empty"; exit 1; }
-        echo "[INFO] Loading Primary dump '$dump_file' into DR..."
-        # Dump এর GTID_PURGED সেট করতে DR এর gtid_executed খালি থাকতে হবে
-        # MySQL 8.4+: RESET BINARY LOGS AND GTIDS; পুরোনো version: RESET MASTER
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET BINARY LOGS AND GTIDS;" 2>/dev/null ||
-            mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET MASTER;"
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = OFF;"
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$dump_file"
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
-    else
-        echo "[WARN] No dump file given. DR must already have Primary's data, or replication will fail (Error 1049/1146)."
-        echo "[WARN] First run on Primary: $0 dump-primary"
-    fi
+    echo "[INFO] Importing DC database dump '$dump_file' into DR..."
+    # Dump এর GTID_PURGED সেট করতে DR এর gtid_executed খালি থাকতে হবে
+    # MySQL 8.4+: RESET BINARY LOGS AND GTIDS; পুরোনো version: RESET MASTER
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET BINARY LOGS AND GTIDS;" 2>/dev/null ||
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET MASTER;"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = OFF;"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$dump_file"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
 
     echo "[INFO] Testing replication login to Primary..."
     if ! MYSQL_PWD="${REPL_PASS}" mysql -h"${PRIMARY_IP}" -u"${REPL_USER}" --ssl-mode=REQUIRED -e "SELECT 1;" >/dev/null; then
@@ -207,7 +204,7 @@ case "${1:-}" in
         check_status
         ;;
     *)
-        echo "Usage: $0 {setup-primary|dump-primary [out_file]|setup-dr [dump_file]|status}"
+        echo "Usage: $0 {setup-primary|dump-primary [out_file]|setup-dr [dump_file, default /tmp/dc_dump.sql]|status}"
         exit 1
         ;;
 esac
