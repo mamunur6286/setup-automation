@@ -155,6 +155,18 @@ EOF
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET BINARY LOGS AND GTIDS;" 2>/dev/null ||
         mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "RESET MASTER;"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = OFF;"
+
+    # DR এর সব পুরোনো application database মুছে ফেলা, যাতে DR শুধু DC এর data দিয়ে নতুন করে তৈরি হয়
+    # sql_log_bin=0: drop গুলো DR এর binlog/GTID এ যাবে না
+    local old_db
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -N -e \
+        "SELECT schema_name FROM information_schema.schemata
+         WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema');" |
+    while IFS= read -r old_db; do
+        echo "[INFO] Dropping DR database '${old_db}'"
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET sql_log_bin=0; DROP DATABASE \`${old_db}\`;"
+    done
+
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$dump_file"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
