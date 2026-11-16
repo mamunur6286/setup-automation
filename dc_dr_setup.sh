@@ -15,7 +15,7 @@ MYSQL_USER="root"
 MYSQL_PASS=""
 
 REPL_USER="repl_user"
-REPL_PASS="Pass@#$00rTy"
+REPL_PASS='Pass@#$00rTy'   # single quotes: "$0" would expand to the script name
 
 # IP Address Configuration
 PRIMARY_IP="172.18.20.11"        # Primary DC Server IP
@@ -152,6 +152,12 @@ EOF
     else
         echo "[WARN] No dump file given. DR must already have Primary's data, or replication will fail (Error 1049/1146)."
         echo "[WARN] First run on Primary: $0 dump-primary"
+    fi
+
+    echo "[INFO] Testing replication login to Primary..."
+    if ! MYSQL_PWD="${REPL_PASS}" mysql -h"${PRIMARY_IP}" -u"${REPL_USER}" --ssl-mode=REQUIRED -e "SELECT 1;" >/dev/null; then
+        echo "[ERROR] DR cannot log in to Primary as '${REPL_USER}'. Copy this same script to Primary and run: $0 setup-primary"
+        exit 1
     fi
 
     echo "[INFO] Pointing DR Node to Primary DC securely..."
