@@ -104,7 +104,8 @@ dump_primary() {
 
     echo "[INFO] Dump written to $out"
     echo "[INFO] Copying dump to DR (${DR_SSH_USER}@${DR_IP}:${DR_SSH_PORT})..."
-    scp -P "${DR_SSH_PORT}" "$out" "${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql"
+    scp -P "${DR_SSH_PORT}" "$out" "${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql" ||
+        echo "[WARN] Auto copy failed. Copy manually: scp -P ${DR_SSH_PORT} $out ${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql"
     echo "[NEXT] On DR: $0 setup-dr /tmp/dc_dump.sql"
 }
 
