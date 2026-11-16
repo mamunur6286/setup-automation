@@ -20,6 +20,8 @@ REPL_PASS='Pass@#$00rTy'   # single quotes: "$0" would expand to the script name
 # IP Address Configuration
 PRIMARY_IP="172.18.20.11"        # Primary DC Server IP
 DR_IP="172.18.21.11"             # DR DC Server IP
+DR_SSH_USER="root"               # dump-primary এর scp এর জন্য
+DR_SSH_PORT="22022"
 
 # সিকিউরিটির জন্য DR IP / Subnet Restricted IP pattern
 DR_ALLOWED_HOST="172.18.21.11"   # '%' এর পরিবর্তে নির্দিষ্ট DR IP ব্যবহার করা হয়েছে
@@ -101,7 +103,8 @@ dump_primary() {
         --set-gtid-purged=ON --add-drop-database --databases $dbs > "$out"
 
     echo "[INFO] Dump written to $out"
-    echo "[NEXT] scp $out <user>@${DR_IP}:/tmp/dc_dump.sql"
+    echo "[INFO] Copying dump to DR (${DR_SSH_USER}@${DR_IP}:${DR_SSH_PORT})..."
+    scp -P "${DR_SSH_PORT}" "$out" "${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql"
     echo "[NEXT] On DR: $0 setup-dr /tmp/dc_dump.sql"
 }
 
