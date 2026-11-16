@@ -28,6 +28,9 @@ DR_ALLOWED_HOST="172.18.21.11"   # '%' এর পরিবর্তে নির
 
 CONFIG_FILE="/etc/mysql/mysql.conf.d/mysqld.cnf"
 
+# DR এ database নাম = DC নাম + suffix (যেমন gormgv3 -> gormgv3_dr)
+DR_DB_SUFFIX="_dr"
+
 # ------------------------------------------------------------------------------
 # 1. CONFIGURE PRIMARY DC NODE
 # ------------------------------------------------------------------------------
@@ -118,6 +121,14 @@ configure_dr() {
     # DR নিজে কোনো database তৈরি করে না: DC এর dump import বাধ্যতামূলক (কিছু বদলানোর আগেই check)
     local dump_file="${1:-/tmp/dc_dump.sql}"
     [ -s "$dump_file" ] || { echo "[ERROR] DC dump '$dump_file' not found or empty. First run on Primary: $0 dump-primary"; exit 1; }
+    local dc_dbs rewrite_cfg="" db
+    dc_dbs=$(sed -n 's/^USE `\(.*\)`;$/\1/p' "$dump_file")
+    [ -n "$dc_dbs" ] || { echo "[ERROR] No databases found in '$dump_file'"; exit 1; }
+    # Replication এ আসা DC database এর change গুলো DR নামের database এ লেখা হবে
+    for db in $dc_dbs; do
+        rewrite_cfg+="replicate-rewrite-db            = ${db}->${db}${DR_DB_SUFFIX}"$'\n'
+        echo "[INFO] DC database '${db}' -> DR database '${db}${DR_DB_SUFFIX}'"
+    done
 
     # MySQL Configuration Backup
     sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
@@ -137,6 +148,7 @@ log_bin                         = mysql-bin
 log_replica_updates             = ON
 read_only                       = ON
 super_read_only                 = ON
+${rewrite_cfg}
 EOF
 
     echo "[INFO] Restarting MySQL service on DR..."
@@ -167,7 +179,9 @@ EOF
         mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET sql_log_bin=0; DROP DATABASE \`${old_db}\`;"
     done
 
-    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$dump_file"
+    # Dump এর DROP/CREATE DATABASE এবং USE লাইনে database নাম বদলে DR নাম দিয়ে import
+    sed -E '/^(\/\*!40000 DROP DATABASE|CREATE DATABASE|USE `)/ s/`([^`]+)`/`\1'"${DR_DB_SUFFIX}"'`/' "$dump_file" |
+        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"}
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
     local dr_tables
