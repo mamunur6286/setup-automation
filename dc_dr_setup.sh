@@ -28,9 +28,6 @@ DR_ALLOWED_HOST="172.18.21.11"   # '%' এর পরিবর্তে নির
 
 CONFIG_FILE="/etc/mysql/mysql.conf.d/mysqld.cnf"
 
-# DR এ database নাম = DC নাম + suffix (যেমন gormgv3 -> gormgv3_dr)
-DR_DB_SUFFIX="_dr"
-
 # ------------------------------------------------------------------------------
 # 1. CONFIGURE PRIMARY DC NODE
 # ------------------------------------------------------------------------------
@@ -109,7 +106,7 @@ dump_primary() {
     echo "[INFO] Copying dump to DR (${DR_SSH_USER}@${DR_IP}:${DR_SSH_PORT})..."
     scp -P "${DR_SSH_PORT}" "$out" "${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql" ||
         echo "[WARN] Auto copy failed. Copy manually: scp -P ${DR_SSH_PORT} $out ${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql"
-    echo "[NEXT] On DR: $0 setup-dr"
+    echo "[NEXT] On DR: $0 setup-dr <dc_db> <dr_db>   (e.g. setup-dr gormgv3 gormgv3_dr)"
 }
 
 # ------------------------------------------------------------------------------
@@ -119,16 +116,23 @@ configure_dr() {
     echo "[INFO] Configuring DR DC Node ($DR_IP)..."
 
     # DR নিজে কোনো database তৈরি করে না: DC এর dump import বাধ্যতামূলক (কিছু বদলানোর আগেই check)
-    local dump_file="${1:-/tmp/dc_dump.sql}"
+    # Command থেকে database নাম: setup-dr <dc_db> <dr_db> [dump_file]
+    local dc_db="${1:-}" dr_db="${2:-}" dump_file="${3:-/tmp/dc_dump.sql}"
+    [ -n "$dc_db" ] && [ -n "$dr_db" ] || { echo "[ERROR] Usage: $0 setup-dr <dc_db> <dr_db> [dump_file]"; exit 1; }
+    # শুধু নিরাপদ নাম: এগুলো SQL, sed এবং mysqld.cnf এ বসানো হয়
+    [[ "$dc_db" =~ ^[A-Za-z0-9_]+$ && "$dr_db" =~ ^[A-Za-z0-9_]+$ ]] ||
+        { echo "[ERROR] Database names may contain only letters, digits and _"; exit 1; }
     [ -s "$dump_file" ] || { echo "[ERROR] DC dump '$dump_file' not found or empty. First run on Primary: $0 dump-primary"; exit 1; }
-    local dc_dbs rewrite_cfg="" db
-    dc_dbs=$(sed -n 's/^USE `\(.*\)`;$/\1/p' "$dump_file")
-    [ -n "$dc_dbs" ] || { echo "[ERROR] No databases found in '$dump_file'"; exit 1; }
-    # Replication এ আসা DC database এর change গুলো DR নামের database এ লেখা হবে
-    for db in $dc_dbs; do
-        rewrite_cfg+="replicate-rewrite-db            = ${db}->${db}${DR_DB_SUFFIX}"$'\n'
-        echo "[INFO] DC database '${db}' -> DR database '${db}${DR_DB_SUFFIX}'"
-    done
+    grep -qx "USE \`${dc_db}\`;" "$dump_file" ||
+        { echo "[ERROR] Database '${dc_db}' not in dump. Found: $(sed -n 's/^USE `\(.*\)`;$/\1/p' "$dump_file" | xargs)"; exit 1; }
+    echo "[INFO] DC database '${dc_db}' -> DR database '${dr_db}'"
+
+    # Dump থেকে শুধু dc_db অংশ (header + GTID_PURGED সহ) রেখে নাম বদলে dr_db করা
+    local db_dump
+    db_dump=$(mktemp)
+    awk -v want="-- Current Database: \`${dc_db}\`" \
+        '/^-- Current Database: `/ { started=1; keep=($0 == want) } !started || keep' "$dump_file" |
+        sed -E '/^(\/\*!40000 DROP DATABASE|CREATE DATABASE|USE `)/ s/`[^`]+`/`'"${dr_db}"'`/' > "$db_dump"
 
     # MySQL Configuration Backup
     sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
@@ -148,7 +152,9 @@ log_bin                         = mysql-bin
 log_replica_updates             = ON
 read_only                       = ON
 super_read_only                 = ON
-${rewrite_cfg}
+# DC এর dc_db change গুলো DR এর dr_db তে, DC এর অন্য database replicate হবে না
+replicate-rewrite-db            = ${dc_db}->${dr_db}
+replicate-do-db                 = ${dr_db}
 EOF
 
     echo "[INFO] Restarting MySQL service on DR..."
@@ -158,8 +164,8 @@ EOF
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "STOP REPLICA; RESET REPLICA ALL;"
 
     local dump_tables
-    dump_tables=$(grep -c '^CREATE TABLE' "$dump_file" || true)
-    echo "[INFO] Dump file: $(ls -l "$dump_file") | tables in dump: ${dump_tables}"
+    dump_tables=$(grep -c '^CREATE TABLE' "$db_dump" || true)
+    echo "[INFO] Dump file: $(ls -l "$dump_file") | tables in '${dc_db}': ${dump_tables}"
     [ "$dump_tables" -gt 0 ] || { echo "[ERROR] Dump has no tables. Re-run on Primary: $0 dump-primary"; exit 1; }
     echo "[INFO] Importing DC database dump '$dump_file' into DR..."
     # Dump এর GTID_PURGED সেট করতে DR এর gtid_executed খালি থাকতে হবে
@@ -179,16 +185,15 @@ EOF
         mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET sql_log_bin=0; DROP DATABASE \`${old_db}\`;"
     done
 
-    # Dump এর DROP/CREATE DATABASE এবং USE লাইনে database নাম বদলে DR নাম দিয়ে import
-    sed -E '/^(\/\*!40000 DROP DATABASE|CREATE DATABASE|USE `)/ s/`([^`]+)`/`\1'"${DR_DB_SUFFIX}"'`/' "$dump_file" |
-        mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"}
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$db_dump"
+    rm -f "$db_dump"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
     local dr_tables
     dr_tables=$(mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -N -e \
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema') AND table_type='BASE TABLE';")
-    echo "[INFO] Tables on DR after import: ${dr_tables} (dump: ${dump_tables})"
-    [ "$dr_tables" -ge "$dump_tables" ] || { echo "[ERROR] Import incomplete: DR has fewer tables than the dump"; exit 1; }
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${dr_db}' AND table_type='BASE TABLE';")
+    echo "[INFO] Tables in DR '${dr_db}' after import: ${dr_tables} (dump: ${dump_tables})"
+    [ "$dr_tables" -eq "$dump_tables" ] || { echo "[ERROR] Import incomplete: DR has fewer tables than the dump"; exit 1; }
 
     echo "[INFO] Testing replication login to Primary..."
     if ! MYSQL_PWD="${REPL_PASS}" mysql -h"${PRIMARY_IP}" -u"${REPL_USER}" --ssl-mode=REQUIRED -e "SELECT 1;" >/dev/null; then
@@ -238,13 +243,13 @@ case "${1:-}" in
         dump_primary "${2:-}"
         ;;
     setup-dr)
-        configure_dr "${2:-}"
+        configure_dr "${2:-}" "${3:-}" "${4:-}"
         ;;
     status)
         check_status
         ;;
     *)
-        echo "Usage: $0 {setup-primary|dump-primary [out_file]|setup-dr [dump_file, default /tmp/dc_dump.sql]|status}"
+        echo "Usage: $0 {setup-primary|dump-primary [out_file]|setup-dr <dc_db> <dr_db> [dump_file, default /tmp/dc_dump.sql]|status}"
         exit 1
         ;;
 esac
