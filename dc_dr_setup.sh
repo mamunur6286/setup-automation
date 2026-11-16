@@ -102,7 +102,7 @@ dump_primary() {
         --single-transaction --triggers --routines --events \
         --set-gtid-purged=ON --add-drop-database --databases $dbs > "$out"
 
-    echo "[INFO] Dump written to $out"
+    echo "[INFO] Dump written to $out ($(grep -c '^CREATE TABLE' "$out") tables)"
     echo "[INFO] Copying dump to DR (${DR_SSH_USER}@${DR_IP}:${DR_SSH_PORT})..."
     scp -P "${DR_SSH_PORT}" "$out" "${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql" ||
         echo "[WARN] Auto copy failed. Copy manually: scp -P ${DR_SSH_PORT} $out ${DR_SSH_USER}@${DR_IP}:/tmp/dc_dump.sql"
@@ -145,6 +145,10 @@ EOF
     # Replace any previous replication config (e.g. pointing to a wrong IP)
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "STOP REPLICA; RESET REPLICA ALL;"
 
+    local dump_tables
+    dump_tables=$(grep -c '^CREATE TABLE' "$dump_file" || true)
+    echo "[INFO] Dump file: $(ls -l "$dump_file") | tables in dump: ${dump_tables}"
+    [ "$dump_tables" -gt 0 ] || { echo "[ERROR] Dump has no tables. Re-run on Primary: $0 dump-primary"; exit 1; }
     echo "[INFO] Importing DC database dump '$dump_file' into DR..."
     # Dump এর GTID_PURGED সেট করতে DR এর gtid_executed খালি থাকতে হবে
     # MySQL 8.4+: RESET BINARY LOGS AND GTIDS; পুরোনো version: RESET MASTER
@@ -154,6 +158,11 @@ EOF
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} < "$dump_file"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SET GLOBAL super_read_only = ON;"
     mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SELECT @@gtid_executed AS dr_gtid_after_load;"
+    local dr_tables
+    dr_tables=$(mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -N -e \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema') AND table_type='BASE TABLE';")
+    echo "[INFO] Tables on DR after import: ${dr_tables} (dump: ${dump_tables})"
+    [ "$dr_tables" -ge "$dump_tables" ] || { echo "[ERROR] Import incomplete: DR has fewer tables than the dump"; exit 1; }
 
     echo "[INFO] Testing replication login to Primary..."
     if ! MYSQL_PWD="${REPL_PASS}" mysql -h"${PRIMARY_IP}" -u"${REPL_USER}" --ssl-mode=REQUIRED -e "SELECT 1;" >/dev/null; then
@@ -184,7 +193,12 @@ EOF
 # ------------------------------------------------------------------------------
 check_status() {
     echo "=== DR Replication Status Check ==="
-    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SHOW REPLICA STATUS\G"
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e "SHOW REPLICA STATUS\G" |
+        grep -E "Source_Host|Replica_(IO|SQL)_Running:|Last_(IO_|SQL_)?Error|Seconds_Behind_Source" ||
+        echo "[WARN] Replication not configured on this server"
+    echo "=== Tables per database ==="
+    mysql -u"${MYSQL_USER}" ${MYSQL_PASS:+-p"${MYSQL_PASS}"} -e \
+        "SELECT table_schema AS db, COUNT(*) AS tables FROM information_schema.tables WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema') GROUP BY 1;"
 }
 
 # ------------------------------------------------------------------------------
